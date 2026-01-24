@@ -1,13 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Literal, Optional
 from openai import OpenAI
-import os, json
+import os
 
-app = FastAPI()
+# -----------------------------
+# App + OpenAI Client
+# -----------------------------
+app = FastAPI(title="SoilQ GenAI Service")
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ----------------- Models -----------------
+# -----------------------------
+# Models
+# -----------------------------
 class DailyForecast(BaseModel):
     date: str
     temp: float
@@ -15,82 +21,141 @@ class DailyForecast(BaseModel):
     wind: float
     condition: str
 
-class DiseaseAdviceRequest(BaseModel):
-    advice_type: str                  # "disease" or "soil"
-    plant_disease: str
-    disease_confidence: float
-    plant_type: str
+
+class AdviceRequest(BaseModel):
+    advice_type: Literal["irrigation", "disease"]
+
+    # ---- irrigation ----
+    irrigation_needed: Optional[float] = None
+    irrigation_confidence: Optional[float] = None
+    time_to_irrigation: Optional[float] = None
     soil_moisture: Optional[float] = None
     soil_temp: Optional[float] = None
     soil_ph: Optional[float] = None
+
+    # ---- disease ----
+    crop_name: Optional[str] = None
+    disease_name: Optional[str] = None
+    disease_confidence: Optional[float] = None
+
+    # ---- shared ----
     forecast: List[DailyForecast]
 
+
 class AdviceResponse(BaseModel):
-    telugu: str
-    hindi: str
-    english: str
+    advice: str
 
-# ----------------- Endpoint -----------------
+
+# -----------------------------
+# Root (Render health check)
+# -----------------------------
+@app.get("/")
+def health():
+    return {"status": "SoilQ GenAI is running 🌱"}
+
+
+# -----------------------------
+# Main API
+# -----------------------------
 @app.post("/genai", response_model=AdviceResponse)
-async def get_disease_advice(req: DiseaseAdviceRequest):
-    if req.advice_type != "disease":
-        raise HTTPException(status_code=400, detail="Only 'disease' advice supported here")
+async def generate_advice(req: AdviceRequest):
 
-    # Format 7-day forecast
-    forecast_text = "\n".join([
-        f"- {day.date}: {day.temp}°C, {day.humidity}% humidity, "
-        f"{day.wind} m/s wind, {day.condition}" for day in req.forecast
-    ])
+    if req.advice_type == "irrigation":
+        return await irrigation_advice(req)
 
-    # Prompt for OpenAI
+    if req.advice_type == "disease":
+        return await disease_advice(req)
+
+    raise HTTPException(status_code=400, detail="Invalid advice_type")
+
+
+# -----------------------------
+# Irrigation Advice
+# -----------------------------
+async def irrigation_advice(req: AdviceRequest):
+
+    forecast_text = "\n".join(
+        f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
+        f"{d.wind} m/s wind, {d.condition}"
+        for d in req.forecast
+    )
+
+    prompt = f"""
+You are an expert agriculture advisor.
+
+### Irrigation Prediction
+- Irrigation Needed: {"Yes" if req.irrigation_needed == 1 else "No"}
+- Confidence: {int((req.irrigation_confidence or 0) * 100)}%
+- Time to Irrigation: {req.time_to_irrigation} hours
+- Soil Moisture: {req.soil_moisture}%
+- Soil Temperature: {req.soil_temp}°C
+- Soil pH: {req.soil_ph}
+
+### 7-Day Weather Forecast
+{forecast_text}
+
+### Instructions
+Give:
+1. Clear irrigation advice
+2. Best time to irrigate
+3. Water-saving tips
+4. Weather-based precautions
+
+Use simple farmer-friendly language.
+Do NOT mention AI, ML, or predictions.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=300
+    )
+
+    return AdviceResponse(
+        advice=response.choices[0].message.content.strip()
+    )
+
+
+# -----------------------------
+# Disease Advice
+# -----------------------------
+async def disease_advice(req: AdviceRequest):
+
+    forecast_text = "\n".join(
+        f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
+        f"{d.wind} m/s wind, {d.condition}"
+        for d in req.forecast
+    )
+
     prompt = f"""
 You are an expert plant pathologist.
 
-The farmer's crop has the following confirmed disease:
-- Crop: {req.plant_type}
-- Disease: {req.plant_disease}
-- Confidence: {int(req.disease_confidence * 100)}%
+### Disease Detection (from app)
+- Crop: {req.crop_name}
+- Detected Disease: {req.disease_name}
+- Confidence: {int((req.disease_confidence or 0) * 100)}%
 
-Soil conditions:
-- Moisture: {req.soil_moisture or 'N/A'}%
-- Temperature: {req.soil_temp or 'N/A'}°C
-- pH: {req.soil_ph or 'N/A'}
-
-7-day weather forecast:
+### Weather Forecast (7 days)
 {forecast_text}
 
-Instructions:
-Explain clearly for farmers:
+### Instructions
+Explain:
 1. What this disease is
 2. Immediate treatment steps
-3. Organic and chemical control options
-4. How weather may affect disease spread
+3. Organic + chemical control options
+4. How weather may affect spread
 5. Prevention for next season
 
-Respond ONLY in strict JSON format:
-{{
-  "telugu": "<advice in Telugu>",
-  "hindi": "<advice in Hindi>",
-  "english": "<advice in English>"
-}}
-Do NOT include anything outside the JSON.
+Use clear, simple language for farmers.
+Do NOT mention AI or ML.
 """
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400
-        )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=350
+    )
 
-        raw = response.choices[0].message.content.strip()
-        data = json.loads(raw)
-
-        return AdviceResponse(
-            telugu=data.get("telugu", ""),
-            hindi=data.get("hindi", ""),
-            english=data.get("english", "")
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return AdviceResponse(
+        advice=response.choices[0].message.content.strip()
+    )
