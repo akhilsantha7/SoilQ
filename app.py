@@ -119,35 +119,40 @@ Do NOT mention AI, ML, or predictions.
 # -----------------------------
 # Disease Advice
 # -----------------------------
+# -----------------------------
+# Disease Advice
+# -----------------------------
 async def disease_advice(req: AdviceRequest):
 
+    # Format 7-day forecast
     forecast_text = "\n".join(
         f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
         f"{d.wind} m/s wind, {d.condition}"
         for d in req.forecast
     )
 
+    # Focused prompt: only crop, disease, confidence, and weather
     prompt = f"""
 You are an expert plant pathologist.
 
-### Disease Detection (from app)
+### Crop & Disease Info
 - Crop: {req.crop_name}
 - Detected Disease: {req.disease_name}
 - Confidence: {int((req.disease_confidence or 0) * 100)}%
 
-### Weather Forecast (7 days)
+### 7-Day Weather Forecast
 {forecast_text}
 
 ### Instructions
-Explain:
+Explain for farmers:
 1. What this disease is
 2. Immediate treatment steps
 3. Organic + chemical control options
 4. How weather may affect spread
 5. Prevention for next season
 
-Use clear, simple language for farmers.
-Do NOT mention AI or ML.
+Use simple, clear language.
+Respond ONLY in the requested format. Do NOT include AI, ML, or soil info.
 """
 
     response = client.chat.completions.create(
