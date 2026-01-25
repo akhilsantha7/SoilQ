@@ -1,0 +1,15 @@
+{
+  "advice_type": "soil",
+  "soil_moisture": 42.0,
+  "soil_temp": 27.0,
+  "soil_ph": 6.5,
+  "forecast": [
+    {"date":"2026-01-25","temp":29,"humidity":65,"wind":3,"condition":"Sunny"},
+    {"date":"2026-01-26","temp":28,"humidity":70,"wind":2,"condition":"Cloudy"},
+    {"date":"2026-01-27","temp":26,"humidity":85,"wind":4,"condition":"Rain"},
+    {"date":"2026-01-28","temp":27,"humidity":60,"wind":3,"condition":"Sunny"},
+    {"date":"2026-01-29","temp":30,"humidity":55,"wind":5,"condition":"Windy"},
+    {"date":"2026-01-30","temp":27,"humidity":65,"wind":2,"condition":"Cloudy"},
+    {"date":"2026-01-31","temp":25,"humidity":90,"wind":4,"condition":"Rain"}
+  ]
+}
