@@ -81,35 +81,37 @@ async def irrigation_advice(req: AdviceRequest):
     )
 
     prompt = f"""
-You are an expert irrigation advisor for farmers.
+    You are an expert irrigation advisor for farmers.
+    Respond in {req.language.capitalize()}.
 
-### Current Field Conditions
-- Crop: {req.crop_name}
-- Soil Moisture: {req.soil_moisture}%
-- Soil Temperature: {req.soil_temp}°C
-- Soil pH: {req.soil_ph}
-- Irrigation Needed: {"YES" if req.irrigation_needed == 1 else "NO"}
-- Time to Irrigation: {req.time_to_irrigation} hours
+    ### Current Field Conditions
+    - Crop: {req.crop_name}
+    - Soil Moisture: {req.soil_moisture}%
+    - Soil Temperature: {req.soil_temp}°C
+    - Soil pH: {req.soil_ph}
+    - Irrigation Needed: {"YES" if req.irrigation_needed == 1 else "NO"}
+    - Time to Irrigation: {req.time_to_irrigation} hours
 
-### 7-Day Weather Forecast (very important)
-{forecast_text}
+    ### 7-Day Weather Forecast
+    {forecast_text}
 
-### Rules (must follow strictly)
-- If rain probability is HIGH in the next 24–48 hours, advise DELAYING irrigation.
-- If no rain is expected and soil moisture is LOW, advise IMMEDIATE irrigation.
-- Always mention specific days or times (example: "tomorrow morning", "within 6 hours").
-- Base irrigation quantity and timing on temperature, humidity, and wind.
-- DO NOT give generic advice.
-- DO NOT say “monitor weather” or “keep an eye”.
-- DO NOT mention AI, ML, or predictions.
+    ### Rules (must follow strictly)
+    - If rain probability is HIGH in the next 24–48 hours, advise DELAYING irrigation.
+    - If no rain is expected and soil moisture is LOW, advise IMMEDIATE irrigation.
+    - Always mention specific days or times (example: "tomorrow morning", "within 6 hours").
+    - Base irrigation quantity and timing on temperature, humidity, and wind.
+    - DO NOT give generic advice.
+    - DO NOT say “monitor weather” or “keep an eye”.
+    - DO NOT mention AI, ML, or predictions.
 
-### Output format (plain text, short paragraphs):
-1. Clear decision: Irrigate NOW / Delay irrigation
-2. Exact timing (hours or day)
-3. Reason using forecast (rain, temperature, humidity)
-4. Water-saving tips based on forecast
-5. Risk warning if irrigation is skipped or delayed
-"""
+    ### Output format (plain text, short paragraphs):
+    1. Clear decision: Irrigate NOW / Delay irrigation
+    2. Exact timing (hours or day)
+    3. Reason using forecast (rain, temperature, humidity)
+    4. Water-saving tips based on forecast
+    5. Risk warning if irrigation is skipped or delayed
+    """
+
 
 
     response = client.chat.completions.create(
