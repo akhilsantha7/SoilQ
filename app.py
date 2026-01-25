@@ -81,29 +81,36 @@ async def irrigation_advice(req: AdviceRequest):
     )
 
     prompt = f"""
-You are an expert agriculture advisor.
+You are an expert irrigation advisor for farmers.
 
-### Irrigation Prediction
-- Irrigation Needed: {"Yes" if req.irrigation_needed == 1 else "No"}
-- Confidence: {int((req.irrigation_confidence or 0) * 100)}%
-- Time to Irrigation: {req.time_to_irrigation} hours
+### Current Field Conditions
+- Crop: {req.crop_name}
 - Soil Moisture: {req.soil_moisture}%
 - Soil Temperature: {req.soil_temp}°C
 - Soil pH: {req.soil_ph}
+- Irrigation Needed: {"YES" if req.irrigation_needed == 1 else "NO"}
+- Time to Irrigation: {req.time_to_irrigation} hours
 
-### 7-Day Weather Forecast
+### 7-Day Weather Forecast (very important)
 {forecast_text}
 
-### Instructions
-Give:
-1. Clear irrigation advice
-2. Best time to irrigate
-3. Water-saving tips
-4. Weather-based precautions
+### Rules (must follow strictly)
+- If rain probability is HIGH in the next 24–48 hours, advise DELAYING irrigation.
+- If no rain is expected and soil moisture is LOW, advise IMMEDIATE irrigation.
+- Always mention specific days or times (example: "tomorrow morning", "within 6 hours").
+- Base irrigation quantity and timing on temperature, humidity, and wind.
+- DO NOT give generic advice.
+- DO NOT say “monitor weather” or “keep an eye”.
+- DO NOT mention AI, ML, or predictions.
 
-Use simple farmer-friendly language.
-Do NOT mention AI, ML, or predictions.
+### Output format (plain text, short paragraphs):
+1. Clear decision: Irrigate NOW / Delay irrigation
+2. Exact timing (hours or day)
+3. Reason using forecast (rain, temperature, humidity)
+4. Water-saving tips based on forecast
+5. Risk warning if irrigation is skipped or delayed
 """
+
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
