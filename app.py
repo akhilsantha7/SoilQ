@@ -49,7 +49,7 @@ class AdviceResponse(BaseModel):
 
 
 # -----------------------------
-# Root (Render health check)
+# Health Check
 # -----------------------------
 @app.get("/")
 def health():
@@ -61,13 +61,10 @@ def health():
 # -----------------------------
 @app.post("/genai", response_model=AdviceResponse)
 async def generate_advice(req: AdviceRequest):
-
     if req.advice_type == "irrigation":
         return await irrigation_advice(req)
-
-    if req.advice_type == "disease":
+    elif req.advice_type == "disease":
         return await disease_advice(req)
-
     raise HTTPException(status_code=400, detail="Invalid advice_type")
 
 
@@ -75,7 +72,6 @@ async def generate_advice(req: AdviceRequest):
 # Irrigation Advice
 # -----------------------------
 async def irrigation_advice(req: AdviceRequest):
-
     forecast_text = "\n".join(
         f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
         f"{d.wind} m/s wind, {d.condition}"
@@ -84,7 +80,7 @@ async def irrigation_advice(req: AdviceRequest):
 
     prompt = f"""
 You are an expert irrigation advisor for farmers.
-Respond in {req.language.capitalize() if req.language else "English"}.
+Respond in {req.language.capitalize() if req.language else "English"} in a professional, clear style suitable for farmers.
 
 ### Current Field Conditions
 - Crop: {req.crop_name or "Unknown"}
@@ -97,30 +93,26 @@ Respond in {req.language.capitalize() if req.language else "English"}.
 ### 7-Day Weather Forecast
 {forecast_text or "No forecast available"}
 
-### Rules (must follow strictly)
-- If rain probability is HIGH in the next 24–48 hours, advise DELAYING irrigation.
-- If no rain is expected and soil moisture is LOW, advise IMMEDIATE irrigation.
-- Always mention specific days or times (example: "tomorrow morning", "within 6 hours").
-- Base irrigation quantity and timing on temperature, humidity, and wind.
-- DO NOT give generic advice.
-- DO NOT say “monitor weather” or “keep an eye”.
-- DO NOT mention AI, ML, or predictions.
+### Rules
+- Advise exact timing (e.g., "within 6 hours", "tomorrow morning").
+- If rain probability is HIGH in next 48 hours, advise delaying irrigation.
+- If soil moisture is LOW and no rain, advise immediate irrigation.
+- Provide clear reasoning using weather data.
+- Include water-saving tips and risk warnings if delayed.
+- DO NOT give generic advice or mention AI, ML, or predictions.
 
-### Output format (plain text, short paragraphs):
-1. Clear decision: Irrigate NOW / Delay irrigation
-2. Exact timing (hours or day)
-3. Reason using forecast (rain, temperature, humidity)
-4. Water-saving tips based on forecast
-5. Risk warning if irrigation is skipped or delayed
+### Output (plain text, short paragraphs):
+- Full sentence explanation for decision.
+- Timing recommendation.
+- Reason based on forecast.
+- Water-saving advice.
+- Risk warning if skipped.
 """
 
-
-
-
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",  # ✅ switched to GPT-5 Mini
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300
+        max_tokens=400
     )
 
     return AdviceResponse(
@@ -131,19 +123,13 @@ Respond in {req.language.capitalize() if req.language else "English"}.
 # -----------------------------
 # Disease Advice
 # -----------------------------
-# -----------------------------
-# Disease Advice
-# -----------------------------
 async def disease_advice(req: AdviceRequest):
-
-    # Format 7-day forecast
     forecast_text = "\n".join(
         f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
         f"{d.wind} m/s wind, {d.condition}"
         for d in req.forecast
     )
 
-    # Focused prompt: only crop, disease, confidence, and weather
     prompt = f"""
 You are an expert plant pathologist.
 
@@ -156,21 +142,20 @@ You are an expert plant pathologist.
 {forecast_text}
 
 ### Instructions
-Explain for farmers:
+Explain in clear, simple, professional language suitable for farmers:
 1. What this disease is
 2. Immediate treatment steps
-3. Organic + chemical control options
-4. How weather may affect spread
+3. Organic and chemical control options
+4. How weather affects spread
 5. Prevention for next season
 
-Use simple, clear language.
-Respond ONLY in the requested format. Do NOT include AI, ML, or soil info.
+Respond ONLY in requested format. Do NOT include AI, ML, or soil info.
 """
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",  # ✅ switched to GPT-5 Mini
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=350
+        max_tokens=400
     )
 
     return AdviceResponse(
