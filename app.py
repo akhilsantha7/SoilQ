@@ -2,13 +2,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Literal, Optional
 from openai import OpenAI
+from fastapi.responses import JSONResponse
 import os
 
 # -----------------------------
 # App + OpenAI Client
 # -----------------------------
 app = FastAPI(title="SoilQ GenAI Service")
-
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # -----------------------------
@@ -23,7 +23,7 @@ class DailyForecast(BaseModel):
 
 
 class AdviceRequest(BaseModel):
-    advice_type: Literal["irrigation", "disease"]
+    advice_type: Literal["irrigation", "disease", "warmup"]
 
     # ---- irrigation ----
     irrigation_needed: Optional[float] = None
@@ -39,8 +39,7 @@ class AdviceRequest(BaseModel):
     disease_confidence: Optional[float] = None
 
     # ---- shared ----
-    forecast: List[DailyForecast]
-
+    forecast: List[DailyForecast] = []
     language: Optional[str] = "english"
 
 
@@ -49,7 +48,7 @@ class AdviceResponse(BaseModel):
 
 
 # -----------------------------
-# Health Check
+# Root (Health Check)
 # -----------------------------
 @app.get("/")
 def health():
@@ -61,10 +60,16 @@ def health():
 # -----------------------------
 @app.post("/genai", response_model=AdviceResponse)
 async def generate_advice(req: AdviceRequest):
+    if req.advice_type == "warmup":
+        # simple warmup response
+        return AdviceResponse(advice="Warmup done ✅")
+
     if req.advice_type == "irrigation":
         return await irrigation_advice(req)
-    elif req.advice_type == "disease":
+
+    if req.advice_type == "disease":
         return await disease_advice(req)
+
     raise HTTPException(status_code=400, detail="Invalid advice_type")
 
 
@@ -72,15 +77,24 @@ async def generate_advice(req: AdviceRequest):
 # Irrigation Advice
 # -----------------------------
 async def irrigation_advice(req: AdviceRequest):
+    # Format forecast nicely
     forecast_text = "\n".join(
-        f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
-        f"{d.wind} m/s wind, {d.condition}"
+        f"- {d.date}: {d.temp:.1f}°C, {d.humidity:.0f}% humidity, "
+        f"{d.wind:.1f} m/s wind, {d.condition}"
         for d in req.forecast
-    )
+    ) or "No forecast available"
+
+    # Use language-friendly phrases
+    lang_map = {
+        "english": "English",
+        "hindi": "Hindi",
+        "telugu": "Telugu"
+    }
+    lang = lang_map.get(req.language.lower(), "English")
 
     prompt = f"""
-You are an expert irrigation advisor for farmers.
-Respond in {req.language.capitalize() if req.language else "English"} in a professional, clear style suitable for farmers.
+You are a professional irrigation advisor for farmers.
+Respond in {lang}.
 
 ### Current Field Conditions
 - Crop: {req.crop_name or "Unknown"}
@@ -91,33 +105,33 @@ Respond in {req.language.capitalize() if req.language else "English"} in a profe
 - Time to Irrigation: {req.time_to_irrigation or 0} hours
 
 ### 7-Day Weather Forecast
-{forecast_text or "No forecast available"}
+{forecast_text}
 
-### Rules
-- Advise exact timing (e.g., "within 6 hours", "tomorrow morning").
-- If rain probability is HIGH in next 48 hours, advise delaying irrigation.
-- If soil moisture is LOW and no rain, advise immediate irrigation.
-- Provide clear reasoning using weather data.
-- Include water-saving tips and risk warnings if delayed.
-- DO NOT give generic advice or mention AI, ML, or predictions.
-
-### Output (plain text, short paragraphs):
-- Full sentence explanation for decision.
-- Timing recommendation.
-- Reason based on forecast.
-- Water-saving advice.
-- Risk warning if skipped.
+### Instructions
+- Provide **complete, well-structured sentences** suitable for farmers.
+- Example: "At this time, there is no need for irrigation because the soil moisture is sufficient."
+- Mention exact timing if irrigation is needed: e.g., "Irrigate in 2 days" or "within 6 hours."
+- Explain reason using forecast (rain, temperature, humidity, wind).
+- Provide water-saving tips and risk warnings.
+- Avoid single-word answers.
+- Respond only in the requested language.
+- DO NOT mention AI, ML, or predictions.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-5-mini",  # ✅ switched to GPT-5 Mini
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=400
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400
+        )
 
-    return AdviceResponse(
-        advice=response.choices[0].message.content.strip()
-    )
+        advice_text = response.choices[0].message.content.strip()
+
+        # Always return valid JSON
+        return JSONResponse(content={"advice": advice_text})
+
+    except Exception as e:
+        return JSONResponse(content={"advice": f"Error generating advice: {str(e)}"})
 
 
 # -----------------------------
@@ -125,39 +139,49 @@ Respond in {req.language.capitalize() if req.language else "English"} in a profe
 # -----------------------------
 async def disease_advice(req: AdviceRequest):
     forecast_text = "\n".join(
-        f"- {d.date}: {d.temp}°C, {d.humidity}% humidity, "
-        f"{d.wind} m/s wind, {d.condition}"
+        f"- {d.date}: {d.temp:.1f}°C, {d.humidity:.0f}% humidity, "
+        f"{d.wind:.1f} m/s wind, {d.condition}"
         for d in req.forecast
-    )
+    ) or "No forecast available"
+
+    lang_map = {
+        "english": "English",
+        "hindi": "Hindi",
+        "telugu": "Telugu"
+    }
+    lang = lang_map.get(req.language.lower(), "English")
 
     prompt = f"""
-You are an expert plant pathologist.
+You are a professional plant pathologist.
 
 ### Crop & Disease Info
-- Crop: {req.crop_name}
-- Detected Disease: {req.disease_name}
+- Crop: {req.crop_name or "Unknown"}
+- Detected Disease: {req.disease_name or "Unknown"}
 - Confidence: {int((req.disease_confidence or 0) * 100)}%
 
 ### 7-Day Weather Forecast
 {forecast_text}
 
 ### Instructions
-Explain in clear, simple, professional language suitable for farmers:
+- Explain clearly in {lang} for farmers:
 1. What this disease is
 2. Immediate treatment steps
-3. Organic and chemical control options
-4. How weather affects spread
+3. Organic + chemical control options
+4. How weather may affect spread
 5. Prevention for next season
-
-Respond ONLY in requested format. Do NOT include AI, ML, or soil info.
+- Use complete sentences, no single-word answers.
+- Do not mention AI or predictions.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-5-mini",  # ✅ switched to GPT-5 Mini
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=400
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400
+        )
 
-    return AdviceResponse(
-        advice=response.choices[0].message.content.strip()
-    )
+        advice_text = response.choices[0].message.content.strip()
+        return JSONResponse(content={"advice": advice_text})
+
+    except Exception as e:
+        return JSONResponse(content={"advice": f"Error generating advice: {str(e)}"})
