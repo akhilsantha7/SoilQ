@@ -163,17 +163,16 @@ You are a professional plant pathologist.
 {forecast_text}
 
 ### Instructions
-- Provide **5 concise advice points** for farmers, each with its own heading.
-- Headings and points should be like:
-    1. **Disease Overview**: Short explanation of the disease.
-    2. **Immediate Actions**: What to do right now.
-    3. **Control Options**: Organic & chemical methods.
-    4. **Weather Considerations**: How forecast affects disease.
-    5. **Prevention Tips**: Steps to avoid next season.
+- Provide **5 concise advice points** for farmers, each with its own heading:
+    **Disease Overview**: Short explanation of the disease.
+    **Immediate Actions**: What to do right now.
+    **Control Options**: Organic & chemical methods.
+    **Weather Considerations**: How forecast affects disease.
+    **Prevention Tips**: Steps to avoid next season.
 - Use complete sentences, 1–2 per point.
 - Each heading should be followed by its advice on a new line.
-- Return only the headings and advice points, each on its own line.
-- Do not include AI, predictions, or numbered lists.
+- **Return JSON array** of 5 strings, each string is one advice point (heading + advice).
+- Do not include AI, numbered lists, or extra text.
 """
 
     try:
@@ -184,7 +183,20 @@ You are a professional plant pathologist.
         )
 
         advice_text = response.choices[0].message.content.strip()
-        return JSONResponse(content={"advice": advice_text})
+
+        # Split into separate advice pages based on headings
+        # Using headings as split markers
+        pages = []
+        headings = ["Disease Overview", "Immediate Actions", "Control Options", "Weather Considerations", "Prevention Tips"]
+        for h in headings:
+            if h in advice_text:
+                start = advice_text.find(h)
+                # Find next heading
+                next_starts = [advice_text.find(nh) for nh in headings if advice_text.find(nh) > start]
+                end = min(next_starts) if next_starts else len(advice_text)
+                pages.append(advice_text[start:end].strip())
+
+        return JSONResponse(content={"advice": pages})
 
     except Exception as e:
-        return JSONResponse(content={"advice": f"Error generating advice: {str(e)}"})
+        return JSONResponse(content={"advice": [f"Error generating advice: {str(e)}"]})
