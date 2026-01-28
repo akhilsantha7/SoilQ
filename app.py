@@ -163,14 +163,17 @@ You are a professional plant pathologist.
 {forecast_text}
 
 ### Instructions
-- Explain clearly in {lang} for farmers:
-1. What this disease is
-2. Immediate treatment steps
-3. Organic + chemical control options
-4. How weather may affect spread
-5. Prevention for next season
-- Use complete sentences, no single-word answers.
-- Do not mention AI or predictions.
+- Provide **5 concise advice points** for farmers, each with its own heading.
+- Headings and points should be like:
+    1. **Disease Overview**: Short explanation of the disease.
+    2. **Immediate Actions**: What to do right now.
+    3. **Control Options**: Organic & chemical methods.
+    4. **Weather Considerations**: How forecast affects disease.
+    5. **Prevention Tips**: Steps to avoid next season.
+- Use complete sentences, 1–2 per point.
+- Each heading should be followed by its advice on a new line.
+- Return only the headings and advice points, each on its own line.
+- Do not include AI, predictions, or numbered lists.
 """
 
     try:
