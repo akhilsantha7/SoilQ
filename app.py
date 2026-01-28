@@ -153,6 +153,7 @@ async def disease_advice(req: AdviceRequest):
 
     prompt = f"""
 You are a professional plant pathologist.
+Respond in {lang}.
 
 ### Crop & Disease Info
 - Crop: {req.crop_name or "Unknown"}
