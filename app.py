@@ -170,9 +170,8 @@ You are a professional plant pathologist.
     **Weather Considerations**: How forecast affects disease.
     **Prevention Tips**: Steps to avoid next season.
 - Use complete sentences, 1–2 per point.
-- Each heading should be followed by its advice on a new line.
-- **Return JSON array** of 5 strings, each string is one advice point (heading + advice).
-- Do not include AI, numbered lists, or extra text.
+- Return a **JSON array** of 5 strings, each string containing heading + advice.
+- Do not include extra text or AI mentions.
 """
 
     try:
@@ -184,19 +183,16 @@ You are a professional plant pathologist.
 
         advice_text = response.choices[0].message.content.strip()
 
-        # Split into separate advice pages based on headings
-        # Using headings as split markers
-        pages = []
-        headings = ["Disease Overview", "Immediate Actions", "Control Options", "Weather Considerations", "Prevention Tips"]
-        for h in headings:
-            if h in advice_text:
-                start = advice_text.find(h)
-                # Find next heading
-                next_starts = [advice_text.find(nh) for nh in headings if advice_text.find(nh) > start]
-                end = min(next_starts) if next_starts else len(advice_text)
-                pages.append(advice_text[start:end].strip())
+        # Try to parse JSON array from model output
+        import json
+        pages = json.loads(advice_text)
+
+        # Ensure it is a list of strings
+        if not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
+            pages = [advice_text]  # fallback: single string
 
         return JSONResponse(content={"advice": pages})
 
     except Exception as e:
+        # Fallback in case of JSON parse error
         return JSONResponse(content={"advice": [f"Error generating advice: {str(e)}"]})
