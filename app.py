@@ -138,12 +138,14 @@ Respond in {lang}.
 # Disease Advice
 # -----------------------------
 async def disease_advice(req: AdviceRequest):
+    # Format 7-day forecast
     forecast_text = "\n".join(
         f"- {d.date}: {d.temp:.1f}°C, {d.humidity:.0f}% humidity, "
         f"{d.wind:.1f} m/s wind, {d.condition}"
         for d in req.forecast
     ) or "No forecast available"
 
+    # Map language
     lang_map = {
         "english": "English",
         "hindi": "Hindi",
@@ -151,6 +153,7 @@ async def disease_advice(req: AdviceRequest):
     }
     lang = lang_map.get(req.language.lower(), "English")
 
+    # Prompt for the AI
     prompt = f"""
 You are a professional plant pathologist.
 Respond in {lang}.
@@ -164,36 +167,56 @@ Respond in {lang}.
 {forecast_text}
 
 ### Instructions
-- Provide **5 concise advice points** for farmers, each with its own heading:
-    **Disease Overview**: Short explanation of the disease.
-    **Immediate Actions**: What to do right now.
-    **Control Options**: Organic & chemical methods.
-    **Weather Considerations**: How forecast affects disease.
-    **Prevention Tips**: Steps to avoid next season.
-- Use complete sentences, 1–2 per point.
-- Return a **JSON array** of 5 strings, each string containing heading + advice.
-- Do not include extra text or AI mentions.
+- Provide 5 concise advice points for farmers, each with a heading:
+    Disease Overview
+    Immediate Actions
+    Control Options
+    Weather Considerations
+    Prevention Tips
+- Return a **JSON array** of 5 strings, each string containing the heading + advice.
+- Each advice point should be 1–2 sentences.
+- Do NOT include AI mentions or extra text outside the JSON array.
 """
 
     try:
+        # Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400
+            max_tokens=500
         )
 
         advice_text = response.choices[0].message.content.strip()
 
-        # Try to parse JSON array from model output
+        # Attempt to parse JSON array
         import json
-        pages = json.loads(advice_text)
-
-        # Ensure it is a list of strings
-        if not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
-            pages = [advice_text]  # fallback: single string
+        pages = []
+        try:
+            pages = json.loads(advice_text)
+            # Validate: must be list of strings
+            if not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
+                raise ValueError("Not a valid JSON array of strings")
+        except Exception:
+            # If parsing fails, split by headings as fallback
+            headings = [
+                "Disease Overview",
+                "Immediate Actions",
+                "Control Options",
+                "Weather Considerations",
+                "Prevention Tips"
+            ]
+            for h in headings:
+                if h in advice_text:
+                    start = advice_text.find(h)
+                    # Find next heading
+                    next_starts = [advice_text.find(nh) for nh in headings if advice_text.find(nh) > start]
+                    end = min(next_starts) if next_starts else len(advice_text)
+                    pages.append(advice_text[start:end].strip())
+            # Ensure 5 elements
+            while len(pages) < 5:
+                pages.append("No advice available for this section.")
 
         return JSONResponse(content={"advice": pages})
 
     except Exception as e:
-        # Fallback in case of JSON parse error
         return JSONResponse(content={"advice": [f"Error generating advice: {str(e)}"]})
