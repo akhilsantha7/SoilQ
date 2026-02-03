@@ -79,21 +79,33 @@ async def generate_advice(req: AdviceRequest):
 # -----------------------------
 # Irrigation Advice (Updated for iOS)
 # -----------------------------
+# -----------------------------
+# Irrigation Advice (Fixed)
+# -----------------------------
 async def irrigation_advice(req: AdviceRequest):
-    # Format forecast nicely
+    # Format 7-day forecast
     forecast_text = "\n".join(
         f"- {d.date}: {d.temp:.1f}°C, {d.humidity:.0f}% humidity, "
         f"{d.wind:.1f} m/s wind, {d.condition}"
         for d in req.forecast
     ) or "No forecast available"
 
-    # Use language-friendly phrases
+    # Map language
     lang_map = {
         "english": "English",
         "hindi": "Hindi",
         "telugu": "Telugu"
     }
     lang = lang_map.get(req.language.lower(), "English")
+
+    # Headings for irrigation advice
+    headings = [
+        "Current Soil Status",
+        "Timing Based on Forecast",
+        "Temperature Consideration",
+        "Wind & Humidity Adjustment",
+        "Preventive Moisture Management"
+    ]
 
     # Prompt for AI
     prompt = f"""
@@ -112,19 +124,11 @@ Respond in {lang}.
 {forecast_text}
 
 ### Instructions
-- Provide 5 clear advice points for farmers.
-- Each point should have a heading and explanation.
-- Use the following headings exactly:
-    1. Current Soil Status
-    2. Timing Based on Forecast
-    3. Temperature Consideration
-    4. Wind & Humidity Adjustment
-    5. Preventive Moisture Management
-- Focus on **prediction-driven, actionable advice** based on current soil and forecast.
-- Avoid generic irrigation tips (like mentioning drip irrigation).
-- Respond **only in JSON** as an array of objects: 
-  [{"heading": "...", "text": "..."}, ...]
-- Each "text" should be 1–2 sentences.
+- Provide 5 clear advice points for farmers, each with a heading:
+    {', '.join(headings)}
+- Return a **JSON array of objects**: 
+  [{{"heading": "...", "text": "..."}}, ...]
+- Each advice text should be 1–2 sentences.
 - Do NOT include AI mentions or extra text outside JSON.
 """
 
@@ -137,7 +141,6 @@ Respond in {lang}.
 
         advice_text = response.choices[0].message.content.strip()
 
-        # Attempt to parse JSON
         import json
         advice_json = []
         try:
@@ -148,24 +151,17 @@ Respond in {lang}.
             ):
                 raise ValueError("Invalid JSON structure")
         except Exception:
-            # Fallback: if AI response fails, return generic placeholders
-            advice_json = [
-                {"heading": "Current Soil Status", "text": "No advice available."},
-                {"heading": "Timing Based on Forecast", "text": "No advice available."},
-                {"heading": "Temperature Consideration", "text": "No advice available."},
-                {"heading": "Wind & Humidity Adjustment", "text": "No advice available."},
-                {"heading": "Preventive Moisture Management", "text": "No advice available."}
-            ]
+            # ✅ Safe fallback if AI response is invalid
+            advice_json = [{"heading": h, "text": "No advice available."} for h in headings]
 
         return JSONResponse(content={"advice": advice_json})
 
     except Exception as e:
         # Catch-all error
         return JSONResponse(content={
-            "advice": [
-                {"heading": "Error", "text": f"Error generating advice: {str(e)}"}
-            ]
+            "advice": [{"heading": "Error", "text": f"Error generating advice: {str(e)}"}]
         })
+
 
 
 # -----------------------------
