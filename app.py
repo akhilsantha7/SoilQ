@@ -82,6 +82,9 @@ async def generate_advice(req: AdviceRequest):
 # -----------------------------
 # Irrigation Advice (Fixed)
 # -----------------------------
+# -----------------------------
+# Irrigation Advice (like Disease Advice)
+# -----------------------------
 async def irrigation_advice(req: AdviceRequest):
     # Format 7-day forecast
     forecast_text = "\n".join(
@@ -124,7 +127,7 @@ Respond in {lang}.
 {forecast_text}
 
 ### Instructions
-- Provide 5 clear advice points for farmers, each with a heading:
+- Provide 5 concise advice points for farmers, each with a heading:
     {', '.join(headings)}
 - Return a **JSON array of objects**: 
   [{{"heading": "...", "text": "..."}}, ...]
@@ -140,27 +143,27 @@ Respond in {lang}.
         )
 
         advice_text = response.choices[0].message.content.strip()
-
-        import json
         advice_json = []
+
+        # Attempt to parse JSON
         try:
             advice_json = json.loads(advice_text)
-            # Validate: must be list of dicts with heading+text
             if not isinstance(advice_json, list) or not all(
                 isinstance(a, dict) and "heading" in a and "text" in a for a in advice_json
             ):
                 raise ValueError("Invalid JSON structure")
         except Exception:
-            # ✅ Safe fallback if AI response is invalid
+            # Fallback if parsing fails
             advice_json = [{"heading": h, "text": "No advice available."} for h in headings]
 
-        return JSONResponse(content={"advice": advice_json})
+        # Convert to AdviceItem
+        advice_items = [AdviceItem(**a) for a in advice_json]
+
+        return AdviceResponse(advice=advice_items)
 
     except Exception as e:
-        # Catch-all error
-        return JSONResponse(content={
-            "advice": [{"heading": "Error", "text": f"Error generating advice: {str(e)}"}]
-        })
+        return AdviceResponse(advice=[AdviceItem(heading="Error", text=f"Error generating advice: {str(e)}")])
+
 
 
 
