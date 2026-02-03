@@ -121,14 +121,15 @@ Respond in {lang}.
 {forecast_text}
 
 ### Instructions
-- Provide 5 clear advice points with the exact headings:
+- Provide 5 advice points with headings:
     {', '.join(headings)}
-- Each point should have 1–2 sentences.
 - Return **only JSON** as an array of objects:
   [{{"heading": "...", "text": "..."}}, ...]
-- Do NOT include AI mentions or extra text.
+- Each text: 1–2 sentences.
+- No AI mentions or extra text outside JSON.
 """
 
+    import json
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -137,22 +138,22 @@ Respond in {lang}.
         )
 
         advice_text = response.choices[0].message.content.strip()
-        advice_json = json.loads(advice_text)
 
-        # Validate JSON
-        if not isinstance(advice_json, list) or not all(
-            isinstance(a, dict) and "heading" in a and "text" in a for a in advice_json
-        ):
-            raise ValueError("Invalid JSON structure")
+        try:
+            advice_json = json.loads(advice_text)
+            if not isinstance(advice_json, list) or not all(
+                isinstance(a, dict) and "heading" in a and "text" in a for a in advice_json
+            ):
+                raise ValueError("Invalid JSON structure")
+        except Exception:
+            advice_json = [{"heading": h, "text": "No advice available."} for h in headings]
 
-        advice_items = [AdviceItem(**a) for a in advice_json]
-        return AdviceResponse(advice=advice_items)
+        return JSONResponse(content={"advice": advice_json})
 
     except Exception as e:
-        # Fallback if AI fails
-        fallback = [AdviceItem(heading=h, text="No advice available.") for h in headings]
-        return AdviceResponse(advice=fallback)
-
+        return JSONResponse(content={
+            "advice": [{"heading": "Error", "text": f"Error generating advice: {str(e)}"}]
+        })
 
 
 # -----------------------------
