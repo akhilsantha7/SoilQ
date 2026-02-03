@@ -171,6 +171,9 @@ Respond in {lang}.
 # -----------------------------
 # Disease Advice
 # -----------------------------
+# -----------------------------
+# Disease Advice (Updated for iOS)
+# -----------------------------
 async def disease_advice(req: AdviceRequest):
     # Format 7-day forecast
     forecast_text = "\n".join(
@@ -187,7 +190,16 @@ async def disease_advice(req: AdviceRequest):
     }
     lang = lang_map.get(req.language.lower(), "English")
 
-    # Prompt for the AI
+    # Headings for disease advice
+    headings = [
+        "Disease Overview",
+        "Immediate Actions",
+        "Control Options",
+        "Weather Considerations",
+        "Prevention Tips"
+    ]
+
+    # Prompt for AI
     prompt = f"""
 You are a professional plant pathologist.
 Respond in {lang}.
@@ -202,18 +214,14 @@ Respond in {lang}.
 
 ### Instructions
 - Provide 5 concise advice points for farmers, each with a heading:
-    Disease Overview
-    Immediate Actions
-    Control Options
-    Weather Considerations
-    Prevention Tips
-- Return a **JSON array** of 5 strings, each string containing the heading + advice.
-- Each advice point should be 1–2 sentences.
-- Do NOT include AI mentions or extra text outside the JSON array.
+    {', '.join(headings)}
+- Return a **JSON array of objects**: 
+  [{{"heading": "...", "text": "..."}}, ...]
+- Each advice text should be 1–2 sentences.
+- Do NOT include AI mentions or extra text outside JSON.
 """
 
     try:
-        # Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -222,35 +230,22 @@ Respond in {lang}.
 
         advice_text = response.choices[0].message.content.strip()
 
-        # Attempt to parse JSON array
         import json
-        pages = []
+        advice_json = []
         try:
-            pages = json.loads(advice_text)
-            # Validate: must be list of strings
-            if not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
-                raise ValueError("Not a valid JSON array of strings")
+            advice_json = json.loads(advice_text)
+            # Validate: must be list of dicts with heading+text
+            if not isinstance(advice_json, list) or not all(
+                isinstance(a, dict) and "heading" in a and "text" in a for a in advice_json
+            ):
+                raise ValueError("Invalid JSON structure")
         except Exception:
-            # If parsing fails, split by headings as fallback
-            headings = [
-                "Disease Overview",
-                "Immediate Actions",
-                "Control Options",
-                "Weather Considerations",
-                "Prevention Tips"
-            ]
-            for h in headings:
-                if h in advice_text:
-                    start = advice_text.find(h)
-                    # Find next heading
-                    next_starts = [advice_text.find(nh) for nh in headings if advice_text.find(nh) > start]
-                    end = min(next_starts) if next_starts else len(advice_text)
-                    pages.append(advice_text[start:end].strip())
-            # Ensure 5 elements
-            while len(pages) < 5:
-                pages.append("No advice available for this section.")
+            # Fallback if parsing fails
+            advice_json = [{"heading": h, "text": "No advice available."} for h in headings]
 
-        return JSONResponse(content={"advice": pages})
+        return JSONResponse(content={"advice": advice_json})
 
     except Exception as e:
-        return JSONResponse(content={"advice": [f"Error generating advice: {str(e)}"]})
+        return JSONResponse(content={
+            "advice": [{"heading": "Error", "text": f"Error generating advice: {str(e)}"}]
+        })
