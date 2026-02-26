@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from pydantic import BaseModel
 from typing import List, Literal, Optional
 from openai import OpenAI
 from fastapi.responses import JSONResponse
 import os
+import base64
+import json
 
 # -----------------------------
 # App + OpenAI Client
@@ -45,6 +47,18 @@ class AdviceRequest(BaseModel):
 
 class AdviceResponse(BaseModel):
     advice: str
+
+
+# ---- Image-based disease / nutrition analysis ----
+class DiseaseImageAnalysis(BaseModel):
+    disease_type: Optional[str] = None
+    disease_confidence: Optional[float] = None
+    nutrition_deficiency: Optional[List[str]] = None
+    severity: Optional[str] = None
+    treatment_summary: Optional[str] = None
+    treatment_steps: Optional[List[str]] = None
+    other_observations: Optional[List[str]] = None
+    raw_advice: Optional[str] = None
 
 
 # -----------------------------
@@ -189,7 +203,6 @@ Respond in {lang}.
         advice_text = response.choices[0].message.content.strip()
 
         # Attempt to parse JSON array
-        import json
         pages = []
         try:
             pages = json.loads(advice_text)
@@ -220,3 +233,88 @@ Respond in {lang}.
 
     except Exception as e:
         return JSONResponse(content={"advice": [f"Error generating advice: {str(e)}"]})
+
+
+# -----------------------------
+# Disease + Nutrition from Image (OpenAI Vision)
+# -----------------------------
+VISION_PROMPT = """You are an expert plant pathologist and agronomist. Analyze this plant/leaf/crop image and return a single valid JSON object (no markdown, no extra text) with these exact keys:
+
+- disease_type: string or null – main disease or disorder (e.g. "Early blight", "Powdery mildew", "None detected")
+- disease_confidence: number 0–1 or null
+- nutrition_deficiency: array of strings or null – e.g. ["Nitrogen", "Iron", "Magnesium"] or [] if none
+- severity: string or null – e.g. "Mild", "Moderate", "Severe", "Healthy"
+- treatment_summary: string or null – 1–2 sentence summary of what to do
+- treatment_steps: array of strings or null – 3–5 concrete steps (e.g. "Apply copper fungicide", "Improve drainage")
+- other_observations: array of strings or null – pest damage, growth stage, soil stress, watering issues, etc.
+
+If the image is not of a plant/leaf/crop or is unclear, set disease_type and nutrition_deficiency appropriately and use other_observations to say so. Respond with ONLY the JSON object."""
+
+
+@app.post("/genai/disease-from-image", response_model=DiseaseImageAnalysis)
+async def disease_from_image(
+    image: UploadFile = File(...),
+    crop_name: Optional[str] = Form(None),
+    language: Optional[str] = Form("english"),
+):
+    """Accept a plant/leaf image, send to OpenAI Vision for disease type, nutrition deficiency, and treatment advice."""
+    # Validate file type
+    allowed = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+    if image.content_type not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {', '.join(allowed)}",
+        )
+
+    content = await image.read()
+    if len(content) > 10 * 1024 * 1024:  # 10 MB
+        raise HTTPException(status_code=400, detail="Image too large (max 10 MB)")
+
+    b64 = base64.standard_b64encode(content).decode("utf-8")
+    media_type = image.content_type or "image/jpeg"
+
+    lang_note = f" Optional context: crop is '{crop_name}'." if crop_name else ""
+    user_content = [
+        {
+            "type": "text",
+            "text": VISION_PROMPT + lang_note + "\nRespond with ONLY the JSON object, no other text.",
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{b64}"},
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": user_content}],
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content.strip()
+        # Strip markdown code block if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        data = json.loads(raw)
+
+        # Map to our response model (allow extra keys from API)
+        return DiseaseImageAnalysis(
+            disease_type=data.get("disease_type"),
+            disease_confidence=data.get("disease_confidence"),
+            nutrition_deficiency=data.get("nutrition_deficiency") or [],
+            severity=data.get("severity"),
+            treatment_summary=data.get("treatment_summary"),
+            treatment_steps=data.get("treatment_steps") or [],
+            other_observations=data.get("other_observations") or [],
+            raw_advice=raw,
+        )
+    except json.JSONDecodeError as e:
+        return DiseaseImageAnalysis(
+            other_observations=[f"Analysis completed but response was not valid JSON: {e}"],
+            raw_advice=raw,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vision analysis failed: {str(e)}")
