@@ -238,17 +238,37 @@ Respond in {lang}.
 # -----------------------------
 # Disease + Nutrition from Image (OpenAI Vision)
 # -----------------------------
+# Allowed disease classes for detection (use exactly these labels)
+DISEASE_CLASS_NAMES = [
+    "Healthy",
+    "None detected",
+    "Anthracnose",
+    "Powdery Mildew",
+    "Sun Blotch",
+    "Cercospora Spot",
+    "Root Rot",
+    "Early Blight",
+    "Scab",
+    "Algal Leaf Spot",
+    "Leaf Spot",
+    "Rust",
+    "Downy Mildew",
+    "Phytophthora",
+]
+
 VISION_PROMPT = """You are an expert plant pathologist and agronomist. Analyze this plant/leaf/crop image and return a single valid JSON object (no markdown, no extra text) with these exact keys:
 
-- disease_type: string or null – main disease or disorder (e.g. "Early blight", "Powdery mildew", "None detected")
-- disease_confidence: number 0–1 or null
+- disease_type: string – MUST be exactly one of: {class_names}. Use "Healthy" if no disease; use "None detected" only if the image is not a plant/leaf/crop or is unclear.
+- disease_confidence: number 0–1
 - nutrition_deficiency: array of strings or null – e.g. ["Nitrogen", "Iron", "Magnesium"] or [] if none
 - severity: string or null – e.g. "Mild", "Moderate", "Severe", "Healthy"
 - treatment_summary: string or null – 1–2 sentence summary of what to do
 - treatment_steps: array of strings or null – 3–5 concrete steps (e.g. "Apply copper fungicide", "Improve drainage")
-- other_observations: array of strings or null – pest damage, growth stage, soil stress, watering issues, etc.
+- other_observations: array of strings or null – pest damage, growth stage, soil stress, watering issues, or if you suspect a condition not in the allowed list, mention it here.
 
-If the image is not of a plant/leaf/crop or is unclear, set disease_type and nutrition_deficiency appropriately and use other_observations to say so. Respond with ONLY the JSON object."""
+You MUST set disease_type to exactly one of the allowed labels above. If the image suggests something not in the list, pick the closest match and add the actual suspicion to other_observations. If the image is not of a plant/leaf/crop or is unclear, set disease_type to "None detected". Respond with ONLY the JSON object.""".format(
+    class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
+)
 
 
 @app.post("/genai/disease-from-image", response_model=DiseaseImageAnalysis)
