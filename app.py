@@ -13,6 +13,10 @@ import json
 app = FastAPI(title="SoilQ GenAI Service")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Model selection: set in env to override (e.g. OPENAI_MODEL=gpt-4o-mini for lower cost)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+
 # -----------------------------
 # Models
 # -----------------------------
@@ -134,7 +138,7 @@ Respond in {lang}.
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=400
         )
@@ -195,7 +199,7 @@ Respond in {lang}.
     try:
         # Call OpenAI
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500
         )
@@ -256,17 +260,37 @@ DISEASE_CLASS_NAMES = [
     "Phytophthora",
 ]
 
-VISION_PROMPT = """You are an expert plant pathologist and agronomist. Analyze this plant/leaf/crop image and return a single valid JSON object (no markdown, no extra text) with these exact keys:
+VISION_PROMPT = """You are an expert plant pathologist. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Different images must get different disease_type when they show different conditions.
 
-- disease_type: string – MUST be exactly one of: {class_names}. Use "Healthy" if no disease; use "None detected" only if the image is not a plant/leaf/crop or is unclear.
-- disease_confidence: number 0–1
-- nutrition_deficiency: array of strings or null – e.g. ["Nitrogen", "Iron", "Magnesium"] or [] if none
-- severity: string or null – e.g. "Mild", "Moderate", "Severe", "Healthy"
-- treatment_summary: string or null – 1–2 sentence summary of what to do
-- treatment_steps: array of strings or null – 3–5 concrete steps (e.g. "Apply copper fungicide", "Improve drainage")
-- other_observations: array of strings or null – pest damage, growth stage, soil stress, watering issues, or if you suspect a condition not in the allowed list, mention it here.
+Allowed disease_type (pick the ONE that best matches what you see):
+{class_names}
 
-You MUST set disease_type to exactly one of the allowed labels above. If the image suggests something not in the list, pick the closest match and add the actual suspicion to other_observations. If the image is not of a plant/leaf/crop or is unclear, set disease_type to "None detected". Respond with ONLY the JSON object.""".format(
+Visual cues to distinguish:
+- Healthy: no spots, lesions, or discoloration; normal green/leaf color.
+- Anthracnose: dark, sunken lesions; can have pink/orange spore masses in wet conditions.
+- Powdery Mildew: white or gray powdery coating on leaves.
+- Sun Blotch: irregular sunken or discolored blotches, often on fruit.
+- Cercospora Spot: small circular spots, often with gray center and dark margin.
+- Root Rot: wilt, yellowing, collapse; roots not visible in leaf-only images—infer from foliage decline or say "Healthy" if only leaves look fine.
+- Early Blight: concentric ring spots, target-like, often on lower leaves.
+- Scab: raised, scabby or corky lesions.
+- Algal Leaf Spot: greenish, velvety or fuzzy spots.
+- Leaf Spot: generic small to medium spots (use if specific type unclear).
+- Rust: orange, yellow, or brown pustules or powdery patches.
+- Downy Mildew: fuzzy or downy growth, often underside; yellow patches on top.
+- Phytophthora: dark water-soaked lesions; crown/collar rot (often inferred from plant collapse).
+- None detected: image is not a plant/leaf/crop or too blurry to tell.
+
+Return a single valid JSON object (no markdown, no other text) with these exact keys:
+- disease_type: string – exactly one of the allowed labels above, chosen from what you SEE in this image.
+- disease_confidence: number 0–1 (how well the image matches that disease; e.g. 0.3 if unclear, 0.9 if very clear).
+- nutrition_deficiency: array of strings or [] – e.g. ["Nitrogen", "Iron"] only if you see signs (yellowing, chlorosis, etc.).
+- severity: string or null – "Mild", "Moderate", "Severe", or "Healthy".
+- treatment_summary: string or null – 1–2 sentences for this specific condition.
+- treatment_steps: array of strings or null – 3–5 concrete steps.
+- other_observations: array of strings or null – anything else you notice (pest, growth stage, multiple issues).
+
+Base disease_type and disease_confidence on THIS image only. Respond with ONLY the JSON object.""".format(
     class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
 )
 
@@ -307,7 +331,7 @@ async def disease_from_image(
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_VISION_MODEL,
             messages=[{"role": "user", "content": user_content}],
             max_tokens=800,
         )
