@@ -244,20 +244,14 @@ Respond in {lang}.
 # -----------------------------
 # Allowed disease classes for detection (use exactly these labels)
 DISEASE_CLASS_NAMES = [
-    "Healthy",
-    "None detected",
-    "Anthracnose",
-    "Powdery Mildew",
-    "Sun Blotch",
-    "Cercospora Spot",
-    "Root Rot",
-    "Early Blight",
-    "Scab",
-    "Algal Leaf Spot",
-    "Leaf Spot",
-    "Rust",
-    "Downy Mildew",
-    "Phytophthora",
+  "Healthy",
+  "Anthracnose",
+  "Powdery Mildew",
+  "Sun Blotch",
+  "Cercospora Leaf Spot",
+  "Root Rot",
+  "Scab",
+  "Algal Leaf Spot"
 ]
 
 VISION_PROMPT = """You are an expert plant pathologist. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Different images must get different disease_type when they show different conditions.
@@ -266,31 +260,26 @@ Allowed disease_type (pick the ONE that best matches what you see):
 {class_names}
 
 Visual cues to distinguish:
-- Healthy: no spots, lesions, or discoloration; normal green/leaf color.
-- Anthracnose: dark, sunken lesions; can have pink/orange spore masses in wet conditions.
-- Powdery Mildew: white or gray powdery coating on leaves.
-- Sun Blotch: irregular sunken or discolored blotches, often on fruit.
-- Cercospora Spot: small circular spots, often with gray center and dark margin.
-- Root Rot: wilt, yellowing, collapse; roots not visible in leaf-only images—infer from foliage decline or say "Healthy" if only leaves look fine.
-- Early Blight: concentric ring spots, target-like, often on lower leaves.
-- Scab: raised, scabby or corky lesions.
-- Algal Leaf Spot: greenish, velvety or fuzzy spots.
-- Leaf Spot: generic small to medium spots (use if specific type unclear).
-- Rust: orange, yellow, or brown pustules or powdery patches.
-- Downy Mildew: fuzzy or downy growth, often underside; yellow patches on top.
-- Phytophthora: dark water-soaked lesions; crown/collar rot (often inferred from plant collapse).
-- None detected: image is not a plant/leaf/crop or too blurry to tell.
+- Healthy: no spots, lesions, or discoloration; normal green leaf color.
+- Anthracnose: dark, sunken lesions; may show pink/orange spore masses in wet conditions.
+- Powdery Mildew: white or gray powdery coating on leaf surface.
+- Sun Blotch: irregular discolored or streaked blotches (more common on fruit than leaves).
+- Cercospora Leaf Spot: small circular spots, often gray center with dark brown or purple margin.
+- Root Rot: generalized yellowing, wilting, canopy thinning, or decline without distinct leaf lesions (roots not visible; infer only from visible plant stress).
+- Scab: raised, corky, or rough scabby lesions.
+- Algal Leaf Spot: greenish, orange, or rust-colored velvety/fuzzy circular spots.
+- None detected: image is not a plant/leaf/crop or too blurry to determine.
 
 Return a single valid JSON object (no markdown, no other text) with these exact keys:
-- disease_type: string – exactly one of the allowed labels above, chosen from what you SEE in this image.
-- disease_confidence: number 0–1 (how well the image matches that disease; e.g. 0.3 if unclear, 0.9 if very clear).
-- nutrition_deficiency: array of strings or [] – e.g. ["Nitrogen", "Iron"] only if you see signs (yellowing, chlorosis, etc.).
+- disease_type: string – exactly one of the allowed labels above.
+- disease_confidence: number 0–1 (e.g., 0.3 if unclear, 0.9 if very clear).
+- nutrition_deficiency: array of strings or [] – e.g. ["Nitrogen", "Iron"] ONLY if visible chlorosis or deficiency patterns appear.
 - severity: string or null – "Mild", "Moderate", "Severe", or "Healthy".
-- treatment_summary: string or null – 1–2 sentences for this specific condition.
-- treatment_steps: array of strings or null – 3–5 concrete steps.
-- other_observations: array of strings or null – anything else you notice (pest, growth stage, multiple issues).
+- treatment_summary: string or null – 1–2 sentences specific to this condition.
+- treatment_steps: array of strings or null – 3–5 concrete actionable steps.
+- other_observations: array of strings or null – pests, multiple symptoms, growth stage, environmental stress, etc.
 
-Base disease_type and disease_confidence on THIS image only. Respond with ONLY the JSON object.""".format(
+Base disease_type and disease_confidence strictly on THIS image only. Respond with ONLY the JSON object.""".format(
     class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
 )
 
