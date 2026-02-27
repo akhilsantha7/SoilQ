@@ -254,10 +254,10 @@ DISEASE_CLASS_NAMES = [
   "Algal Leaf Spot"
 ]
 
-VISION_PROMPT = """You are an expert plant pathologist. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Each image must get ONE disease_type corresponding to the most dominant visible condition. Do NOT guess.
+VISION_PROMPT = """You are an expert plant pathologist. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Different images must get different disease_type when they show different conditions.
 
 Allowed disease_type (pick the ONE that best matches what you see):
-"Healthy", "Anthracnose", "Powdery Mildew", "Sun Blotch", "Cercospora Leaf Spot", "Root Rot", "Scab", "Algal Leaf Spot"
+{class_names}
 
 Visual cues to distinguish:
 - Healthy: no spots, lesions, or discoloration; normal green leaf color.
@@ -265,28 +265,19 @@ Visual cues to distinguish:
 - Powdery Mildew: white or gray powdery coating on leaf surface.
 - Sun Blotch: irregular discolored or streaked blotches (more common on fruit than leaves).
 - Cercospora Leaf Spot: small circular spots, often gray center with dark brown or purple margin.
-- Root Rot: generalized yellowing, wilting, or canopy decline; roots not visible; choose Healthy if leaves appear normal.
+- Root Rot: generalized yellowing, wilting, canopy thinning, or decline without distinct leaf lesions (roots not visible; infer only from visible plant stress).
 - Scab: raised, corky, or rough scabby lesions.
 - Algal Leaf Spot: greenish, orange, or rust-colored velvety/fuzzy circular spots.
+- None detected: image is not a plant/leaf/crop or too blurry to determine.
 
-Only include nutrition_deficiency if clear visual signs are visible. Currently, only detect:
-- Nitrogen deficiency: uniform yellowing of older leaves; do NOT guess other nutrients.
-
-Rules:
-- If disease_type is Healthy, severity MUST be "Healthy".
-- Severity: "Mild", "Moderate", "Severe", or "Healthy".
-- Select the most dominant disease if multiple symptoms appear.
-- disease_confidence: give as a percentage (0–100), where 100 = very certain.
-- Return a single JSON object with NO extra text.
-
-Return JSON object with EXACT keys:
-- disease_type: string
-- disease_confidence: number (0–100)
-- nutrition_deficiency: array of strings or []
-- severity: string or null
-- treatment_summary: string or null
-- treatment_steps: array of strings or null
-- other_observations: array of strings or null
+Return a single valid JSON object (no markdown, no other text) with these exact keys:
+- disease_type: string – exactly one of the allowed labels above.
+- disease_confidence: number 0–100 in percentage (e.g., 30% if unclear, 90% if very clear).
+- nutrition_deficiency: array of strings or [] – e.g. ["Nitrogen", "Iron"] ONLY if visible chlorosis or deficiency patterns appear.
+- severity: string or null – "Mild", "Moderate", "Severe", or "Healthy".
+- treatment_summary: string or null – 1–2 sentences specific to this condition.
+- treatment_steps: array of strings or null – 3–5 concrete actionable steps.
+- other_observations: array of strings or null – pests, multiple symptoms, growth stage, environmental stress, etc.
 
 Base disease_type and disease_confidence strictly on THIS image only. Respond with ONLY the JSON object.""".format(
     class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
