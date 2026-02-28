@@ -306,11 +306,17 @@ async def disease_from_image(
     b64 = base64.standard_b64encode(content).decode("utf-8")
     media_type = image.content_type or "image/jpeg"
 
-    lang_note = f" Optional context: crop is '{crop_name}'." if crop_name else ""
+    lang_map = {"english": "English", "hindi": "Hindi", "telugu": "Telugu"}
+    lang = lang_map.get((language or "english").lower(), "English")
+    lang_instruction = (
+        f" Write all human-readable text (treatment_summary, treatment_steps, other_observations) in {lang}."
+        + (" Use the native script (Devanagari for Hindi, Telugu script for Telugu)." if lang != "English" else "")
+    )
+    crop_note = f" Optional context: crop is '{crop_name}'." if crop_name else ""
     user_content = [
         {
             "type": "text",
-            "text": VISION_PROMPT + lang_note + "\nRespond with ONLY the JSON object, no other text.",
+            "text": VISION_PROMPT + lang_instruction + crop_note + "\nRespond with ONLY the JSON object, no other text.",
         },
         {
             "type": "image_url",
