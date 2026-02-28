@@ -111,7 +111,7 @@ async def irrigation_advice(req: AdviceRequest):
     lang = lang_map.get(req.language.lower(), "English")
 
     prompt = f"""
-You are a professional irrigation advisor for farmers.
+You are a professional irrigation advisor for farmers. Give a **smart advisory**, not raw data.
 Respond in {lang}.
 
 ### Current Field Conditions
@@ -119,21 +119,26 @@ Respond in {lang}.
 - Soil Moisture: {req.soil_moisture or 0}%
 - Soil Temperature: {req.soil_temp or 0}°C
 - Soil pH: {req.soil_ph or 0}
-- Irrigation Needed: {"YES" if (req.irrigation_needed or 0) == 1 else "NO"}
-- Time to Irrigation: {req.time_to_irrigation or 0} hours
+- Irrigation needed: {"Yes" if (req.irrigation_needed or 0) == 1 else "No"}
+- Hours until irrigation recommended: {req.time_to_irrigation or 0}
 
 ### 7-Day Weather Forecast
 {forecast_text}
 
-### Instructions
-- Provide **complete, well-structured sentences** suitable for farmers.
-- Example: "At this time, there is no need for irrigation because the soil moisture is sufficient."
-- Mention exact timing if irrigation is needed: e.g., "Irrigate in 2 days" or "within 6 hours."
-- Explain reason using forecast (rain, temperature, humidity, wind).
-- Provide water-saving tips and risk warnings.
-- Avoid single-word answers.
-- Respond only in the requested language.
-- DO NOT mention AI, ML, or predictions.
+### Required output format (smart advisory, not moisture display)
+- Do NOT just say "Soil moisture: X%" or "Time to irrigation: Y hours."
+- Give **actionable advice** in this style:
+
+**If irrigation IS needed:**
+1. First line: specific recommendation with 💧, e.g. "💧 Irrigate tomorrow 6 AM for 40 minutes" or "💧 Irrigate today evening (5–6 PM) for 35 minutes". Use the "hours until irrigation" and forecast to pick a concrete **day**, **time** (e.g. early morning), and **duration in minutes** (suggest 30–45 min typically; adjust by crop and soil).
+2. Next: weather-based adjustment in one short line, e.g. "Rain expected in 48 hours — reduce duration by 20%" or "No rain in next 5 days — you can irrigate at full duration."
+3. Optional: one brief water-saving or risk tip.
+
+**If irrigation is NOT needed:**
+- One clear line, e.g. "💧 No irrigation needed now. Soil moisture is sufficient. Next check in 2–3 days."
+- Optional: mention when rain is expected or when to irrigate next.
+
+- Use complete sentences. Respond only in {lang}. Do not mention AI or predictions.
 """
 
     try:
