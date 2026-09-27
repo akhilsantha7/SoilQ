@@ -163,6 +163,34 @@ Respond in {lang}.
 # -----------------------------
 # Disease Advice
 # -----------------------------
+# Forcing a tool call (instead of asking the model to "reply with only JSON")
+# means the SDK hands back schema-validated, already-parsed data — there is
+# no raw text to mis-parse if the model adds a stray sentence, which is what
+# was producing "Unknown condition" / empty advice under the old prompt-only
+# JSON approach.
+DISEASE_TEXT_ADVICE_TOOL = {
+    "name": "report_disease_advice",
+    "description": "Report 5 farmer-facing advice points about a diagnosed crop disease.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "advice_points": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 5,
+                "maxItems": 5,
+                "description": (
+                    "Exactly 5 strings, in this order, each starting with its heading: "
+                    "'Disease Overview', 'Immediate Actions', 'Control Options', "
+                    "'Weather Considerations', 'Prevention Tips'."
+                ),
+            }
+        },
+        "required": ["advice_points"],
+    },
+}
+
+
 async def disease_advice(req: AdviceRequest):
     # Format 7-day forecast
     forecast_text = "\n".join(
@@ -199,47 +227,26 @@ Respond in {lang}.
     Control Options
     Weather Considerations
     Prevention Tips
-- Return a **JSON array** of 5 strings, each string containing the heading + advice.
 - Each advice point should be 1–2 sentences.
-- Do NOT include AI mentions or extra text outside the JSON array.
+- Do NOT mention AI or predictions.
 """
 
     try:
-        # Call Claude
         response = await client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=500,
+            tools=[DISEASE_TEXT_ADVICE_TOOL],
+            tool_choice={"type": "tool", "name": "report_disease_advice"},
             messages=[{"role": "user", "content": prompt}],
         )
 
-        advice_text = response.content[0].text.strip()
+        tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+        pages = tool_use.input.get("advice_points") if tool_use else None
 
-        # Attempt to parse JSON array
-        pages = []
-        try:
-            pages = json.loads(advice_text)
-            # Validate: must be list of strings
-            if not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
-                raise ValueError("Not a valid JSON array of strings")
-        except Exception:
-            # If parsing fails, split by headings as fallback
-            headings = [
-                "Disease Overview",
-                "Immediate Actions",
-                "Control Options",
-                "Weather Considerations",
-                "Prevention Tips"
-            ]
-            for h in headings:
-                if h in advice_text:
-                    start = advice_text.find(h)
-                    # Find next heading
-                    next_starts = [advice_text.find(nh) for nh in headings if advice_text.find(nh) > start]
-                    end = min(next_starts) if next_starts else len(advice_text)
-                    pages.append(advice_text[start:end].strip())
-            # Ensure 5 elements
-            while len(pages) < 5:
-                pages.append("No advice available for this section.")
+        if not pages or not isinstance(pages, list) or not all(isinstance(p, str) for p in pages):
+            pages = ["No advice available for this section."] * 5
+        elif len(pages) < 5:
+            pages = pages + ["No advice available for this section."] * (5 - len(pages))
 
         return JSONResponse(content={"advice": pages})
 
@@ -278,18 +285,57 @@ Visual cues to distinguish:
 - Algal Leaf Spot: greenish, orange, or rust-colored velvety/fuzzy circular spots.
 - None detected: image is not a plant/leaf/crop or too blurry to determine.
 
-Return a single valid JSON object (no markdown, no other text) with these exact keys:
-- disease_type: string – exactly one of the allowed labels above.
-- disease_confidence: number 0–100 in percentage (e.g., 30% if unclear, 90% if very clear).
-- nutrition_deficiency: array of strings or [] – e.g. ["Nitrogen", "Iron"] ONLY if visible chlorosis or deficiency patterns appear.
-- severity: string or null – "Mild", "Moderate", "Severe", or "Healthy".
-- treatment_summary: string or null – 1–2 sentences specific to this condition.
-- treatment_steps: array of strings or null – 3–5 concrete actionable steps.
-- other_observations: array of strings or null – pests, multiple symptoms, growth stage, environmental stress, etc.
-
-Base disease_type and disease_confidence strictly on THIS image only. Respond with ONLY the JSON object.""".format(
+Base disease_type and disease_confidence strictly on THIS image only. Then call the report_disease_analysis tool with your findings — always call it, even for a healthy or unclear photo, picking your best-guess disease_type rather than leaving it out.""".format(
     class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
 )
+
+# Forcing a tool call here (instead of asking the model to "reply with only
+# JSON") means the SDK hands back schema-validated, already-parsed data —
+# there is no raw JSON string to mis-parse if the model adds so much as one
+# stray sentence, which is what was producing "Unknown condition" under the
+# old prompt-only JSON approach.
+DISEASE_ANALYSIS_TOOL = {
+    "name": "report_disease_analysis",
+    "description": "Report the plant disease diagnosis found in the analyzed image.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "disease_type": {
+                "type": "string",
+                "enum": DISEASE_CLASS_NAMES,
+                "description": "The single best-matching disease classification for the image.",
+            },
+            "disease_confidence": {
+                "type": "number",
+                "description": "Confidence 0-100 (percentage).",
+            },
+            "nutrition_deficiency": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Nutrient deficiencies visible, e.g. ['Nitrogen', 'Iron']. Empty array if none visible.",
+            },
+            "severity": {
+                "type": "string",
+                "enum": ["Mild", "Moderate", "Severe", "Healthy"],
+            },
+            "treatment_summary": {
+                "type": "string",
+                "description": "1-2 sentences specific to this condition.",
+            },
+            "treatment_steps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-5 concrete actionable steps.",
+            },
+            "other_observations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Pests, multiple symptoms, growth stage, environmental stress, etc.",
+            },
+        },
+        "required": ["disease_type", "disease_confidence"],
+    },
+}
 
 
 @app.post("/genai/disease-from-image", response_model=DiseaseImageAnalysis)
@@ -332,7 +378,7 @@ async def disease_from_image(
         },
         {
             "type": "text",
-            "text": VISION_PROMPT + lang_instruction + crop_note + "\nRespond with ONLY the JSON object, no other text.",
+            "text": VISION_PROMPT + lang_instruction + crop_note,
         },
     ]
 
@@ -340,16 +386,15 @@ async def disease_from_image(
         response = await client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=800,
+            tools=[DISEASE_ANALYSIS_TOOL],
+            tool_choice={"type": "tool", "name": "report_disease_analysis"},
             messages=[{"role": "user", "content": user_content}],
         )
-        raw = response.content[0].text.strip()
-        # Strip markdown code block if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        data = json.loads(raw)
+
+        tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+        if not tool_use:
+            raise ValueError("Model did not return a tool_use block")
+        data = tool_use.input
 
         # Map to our response model (allow extra keys from API)
         return DiseaseImageAnalysis(
@@ -360,12 +405,7 @@ async def disease_from_image(
             treatment_summary=data.get("treatment_summary"),
             treatment_steps=data.get("treatment_steps") or [],
             other_observations=data.get("other_observations") or [],
-            raw_advice=raw,
-        )
-    except json.JSONDecodeError as e:
-        return DiseaseImageAnalysis(
-            other_observations=[f"Analysis completed but response was not valid JSON: {e}"],
-            raw_advice=raw,
+            raw_advice=json.dumps(data),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Vision analysis failed: {str(e)}")
