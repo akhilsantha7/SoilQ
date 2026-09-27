@@ -3,5 +3,5 @@ uvicorn
 sqlalchemy
 pydantic
 requests
-openai
+anthropic
 python-multipart

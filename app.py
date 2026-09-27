@@ -1,21 +1,24 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from pydantic import BaseModel
 from typing import List, Literal, Optional
-from openai import OpenAI
+from anthropic import AsyncAnthropic
 from fastapi.responses import JSONResponse
 import os
 import base64
 import json
 
 # -----------------------------
-# App + OpenAI Client
+# App + Anthropic Client
 # -----------------------------
 app = FastAPI(title="SoilQ GenAI Service")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# Model selection: set in env to override (e.g. OPENAI_MODEL=gpt-4o-mini for lower cost)
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+# Model selection: set in env to override. Defaults to Claude Sonnet 4.5 —
+# check https://docs.claude.com/en/docs/about-claude/models for the latest
+# model id and bump ANTHROPIC_MODEL in Render's environment if a newer one
+# is available. One model handles both text advice and vision (no separate
+# vision model needed, unlike the old OpenAI setup).
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
 
 # -----------------------------
 # Models
@@ -142,13 +145,13 @@ Respond in {lang}.
 """
 
     try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
+        response = await client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400
         )
 
-        advice_text = response.choices[0].message.content.strip()
+        advice_text = response.content[0].text.strip()
 
         # Always return valid JSON
         return JSONResponse(content={"advice": advice_text})
@@ -202,14 +205,14 @@ Respond in {lang}.
 """
 
     try:
-        # Call OpenAI
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
+        # Call Claude
+        response = await client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=500
         )
 
-        advice_text = response.choices[0].message.content.strip()
+        advice_text = response.content[0].text.strip()
 
         # Attempt to parse JSON array
         pages = []
@@ -245,7 +248,7 @@ Respond in {lang}.
 
 
 # -----------------------------
-# Disease + Nutrition from Image (OpenAI Vision)
+# Disease + Nutrition from Image (Claude Vision)
 # -----------------------------
 # Allowed disease classes for detection (use exactly these labels)
 DISEASE_CLASS_NAMES = [
@@ -295,7 +298,7 @@ async def disease_from_image(
     crop_name: Optional[str] = Form(None),
     language: Optional[str] = Form("english"),
 ):
-    """Accept a plant/leaf image, send to OpenAI Vision for disease type, nutrition deficiency, and treatment advice."""
+    """Accept a plant/leaf image, send to Claude Vision for disease type, nutrition deficiency, and treatment advice."""
     # Validate file type
     allowed = {"image/jpeg", "image/png", "image/gif", "image/webp"}
     if image.content_type not in allowed:
@@ -320,22 +323,26 @@ async def disease_from_image(
     crop_note = f" Optional context: crop is '{crop_name}'." if crop_name else ""
     user_content = [
         {
-            "type": "text",
-            "text": VISION_PROMPT + lang_instruction + crop_note + "\nRespond with ONLY the JSON object, no other text.",
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
         },
         {
-            "type": "image_url",
-            "image_url": {"url": f"data:{media_type};base64,{b64}"},
+            "type": "text",
+            "text": VISION_PROMPT + lang_instruction + crop_note + "\nRespond with ONLY the JSON object, no other text.",
         },
     ]
 
     try:
-        response = client.chat.completions.create(
-            model=OPENAI_VISION_MODEL,
-            messages=[{"role": "user", "content": user_content}],
+        response = await client.messages.create(
+            model=ANTHROPIC_MODEL,
             max_tokens=800,
+            messages=[{"role": "user", "content": user_content}],
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.content[0].text.strip()
         # Strip markdown code block if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
