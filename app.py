@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Header
 from pydantic import BaseModel
 from typing import List, Literal, Optional
 from anthropic import AsyncAnthropic
 from fastapi.responses import JSONResponse
+from datetime import date
 import os
 import base64
 import json
+import requests
 
 # -----------------------------
 # App + Anthropic Client
@@ -64,6 +66,15 @@ class DiseaseImageAnalysis(BaseModel):
     severity: Optional[str] = None
     treatment_summary: Optional[str] = None
     treatment_steps: Optional[List[str]] = None
+    other_observations: Optional[List[str]] = None
+    raw_advice: Optional[str] = None
+
+
+# ---- Image-based fruit ripeness analysis ----
+class RipenessImageAnalysis(BaseModel):
+    ripeness_stage: Optional[str] = None
+    ripeness_confidence: Optional[float] = None
+    harvest_advice: Optional[str] = None
     other_observations: Optional[List[str]] = None
     raw_advice: Optional[str] = None
 
@@ -482,3 +493,341 @@ async def disease_from_image(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Vision analysis failed: {str(e)}")
+
+
+# -----------------------------
+# Fruit Ripeness from Image (Claude Vision)
+# -----------------------------
+# Same crop-aware pattern as CROP_DISEASE_INFO above: curated fruits get a
+# fixed ripeness scale + visual cues for a reliable read; anything typed
+# outside this list (the "Checking something else?" field on the fruit
+# picker) falls through to a free-text ripeness assessment instead of being
+# wrongly matched against one of these scales.
+CROP_RIPENESS_INFO = {
+    "mango": {
+        "stages": ["Unripe", "Ripe", "Overripe", "Spoiled"],
+        "visual_cues": """- Unripe: Skin mostly green, very firm, tight smooth surface, no fragrance.
+- Ripe: Skin has turned yellow/orange/red-blush (variety dependent), slight give when pressed gently, sweet fragrance near the stem.
+- Overripe: Skin very soft and wrinkled, dark orange-to-brown patches, strong sweet smell, slight shriveling.
+- Spoiled: Visible mold, black or sunken patches, leaking juice, fermented smell, insect damage.""",
+    },
+    "banana": {
+        "stages": ["Unripe", "Ripe", "Overripe", "Spoiled"],
+        "visual_cues": """- Unripe: Skin fully green, firm, no brown spots.
+- Ripe: Skin yellow with a few small brown "sugar spots", firm but yields slightly to gentle pressure.
+- Overripe: Skin mostly brown or black, flesh visibly soft/mushy through the skin, strong sweet smell.
+- Spoiled: Skin fully black, split or leaking, visible mold, fermented odor.""",
+    },
+    "papaya": {
+        "stages": ["Unripe", "Ripe", "Overripe", "Spoiled"],
+        "visual_cues": """- Unripe: Skin fully green, very firm, no color break.
+- Ripe: Skin mostly yellow-orange and fairly uniform, slight give when pressed.
+- Overripe: Skin heavily wrinkled and very soft, dark orange-to-brown blotches.
+- Spoiled: Moldy patches, sunken soft spots, leaking, fermented odor.""",
+    },
+    "tomato": {
+        "stages": ["Unripe", "Ripe", "Overripe", "Spoiled"],
+        "visual_cues": """- Unripe: Skin green or green with slight blush, very firm.
+- Ripe: Skin fully red/orange (variety dependent), glossy, firm but yields slightly to gentle pressure.
+- Overripe: Skin very soft, wrinkled or cracked, deep red color, may show splitting.
+- Spoiled: Visible mold, sunken watery patches, collapsed structure, white/gray mold or black rot spots.""",
+    },
+}
+
+
+def build_ripeness_prompt(display_fruit: str, info: Optional[dict]) -> str:
+    if info:
+        return """You are an expert postharvest specialist examining a {fruit} photo. Look at THIS specific image and base your answer ONLY on what you see (skin color, firmness cues inferred from texture/wrinkling, blemishes, mold, softness, etc.). Different images must get different ripeness_stage when they show different conditions.
+
+Allowed ripeness_stage (pick the ONE that best matches what you see):
+{stage_names}
+
+Visual cues to distinguish:
+{visual_cues}
+- Unable to determine: image is not a {fruit}/fruit or too blurry to determine.
+
+Base ripeness_stage and ripeness_confidence strictly on THIS image only. Then call the report_ripeness_analysis tool with your findings — always call it, even for a clearly spoiled or unclear photo, picking your best-guess ripeness_stage rather than leaving it out.""".format(
+            fruit=display_fruit,
+            stage_names=", ".join(f'"{x}"' for x in info["stages"]),
+            visual_cues=info["visual_cues"],
+        )
+
+    # No curated ripeness scale for this fruit (farmer typed a fruit name
+    # outside the picker) — still tell the model which fruit it is, but let
+    # it describe the ripeness stage itself rather than forcing a fit into
+    # an unrelated fruit's scale.
+    return f"""You are an expert postharvest specialist examining a {display_fruit} photo. Base your answer ONLY on what you see in THIS image (skin color, firmness cues inferred from texture/wrinkling, blemishes, mold, softness, etc.) — do not guess from general knowledge of {display_fruit} beyond what's visible here.
+
+There is no fixed ripeness scale configured for {display_fruit} in this system, so use your own postharvest knowledge and describe the ripeness stage in plain English (e.g. "Unripe", "Ripe", "Overripe", "Spoiled", or a more specific stage if that fits the fruit better). If the image doesn't clearly show a fruit, set ripeness_stage to "Unable to determine".
+
+Then call the report_ripeness_analysis tool with your findings — always call it, even for a spoiled or unclear photo, picking your best-guess rather than leaving it out."""
+
+
+def build_ripeness_tool(info: Optional[dict]) -> dict:
+    ripeness_stage_schema = (
+        {
+            "type": "string",
+            "enum": info["stages"],
+            "description": "The single best-matching ripeness stage for the image.",
+        }
+        if info
+        else {
+            "type": "string",
+            "description": "The ripeness stage in plain English, or 'Unable to determine'.",
+        }
+    )
+    return {
+        "name": "report_ripeness_analysis",
+        "description": "Report the fruit ripeness assessment found in the analyzed image.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ripeness_stage": ripeness_stage_schema,
+                "ripeness_confidence": {
+                    "type": "number",
+                    "description": "Confidence 0-100 (percentage).",
+                },
+                "harvest_advice": {
+                    "type": "string",
+                    "description": (
+                        "1-2 sentence actionable recommendation for harvest timing or sale, "
+                        "specific to this ripeness stage, e.g. 'Harvest within 2-3 days for best "
+                        "market price.' or 'Sell immediately — past peak ripeness.'"
+                    ),
+                },
+                "other_observations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Blemishes, pest damage, uneven ripening, bruising, etc.",
+                },
+            },
+            "required": ["ripeness_stage", "ripeness_confidence"],
+        },
+    }
+
+
+@app.post("/genai/ripeness-from-image", response_model=RipenessImageAnalysis)
+async def ripeness_from_image(
+    image: UploadFile = File(...),
+    fruit_name: Optional[str] = Form(None),
+    language: Optional[str] = Form("english"),
+):
+    """Accept a fruit image, send to Claude Vision for a ripeness stage and harvest/sale advice."""
+    allowed = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+    if image.content_type not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {', '.join(allowed)}",
+        )
+
+    content = await image.read()
+    if len(content) > 10 * 1024 * 1024:  # 10 MB
+        raise HTTPException(status_code=400, detail="Image too large (max 10 MB)")
+
+    b64 = base64.standard_b64encode(content).decode("utf-8")
+    media_type = image.content_type or "image/jpeg"
+
+    lang_map = {"english": "English", "hindi": "Hindi", "telugu": "Telugu"}
+    lang = lang_map.get((language or "english").lower(), "English")
+    lang_instruction = (
+        f" Write all human-readable text (harvest_advice, other_observations) in {lang}."
+        + (" Use the native script (Devanagari for Hindi, Telugu script for Telugu)." if lang != "English" else "")
+    )
+
+    fruit_name_raw = (fruit_name or "").strip()
+    fruit_key = fruit_name_raw.lower()
+    info = CROP_RIPENESS_INFO.get(fruit_key)  # None if this fruit has no curated scale
+    display_fruit = fruit_name_raw.capitalize() if fruit_name_raw else "fruit"
+    ripeness_prompt = build_ripeness_prompt(display_fruit, info)
+    ripeness_tool = build_ripeness_tool(info)
+
+    user_content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
+        },
+        {
+            "type": "text",
+            "text": ripeness_prompt + lang_instruction,
+        },
+    ]
+
+    try:
+        response = await client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=600,
+            tools=[ripeness_tool],
+            tool_choice={"type": "tool", "name": "report_ripeness_analysis"},
+            messages=[{"role": "user", "content": user_content}],
+        )
+
+        tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+        if not tool_use:
+            raise ValueError("Model did not return a tool_use block")
+        data = tool_use.input
+
+        return RipenessImageAnalysis(
+            ripeness_stage=data.get("ripeness_stage"),
+            ripeness_confidence=data.get("ripeness_confidence"),
+            harvest_advice=data.get("harvest_advice"),
+            other_observations=data.get("other_observations") or [],
+            raw_advice=json.dumps(data),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ripeness analysis failed: {str(e)}")
+
+
+# -----------------------------
+# Weather Alerts (push notifications via Firebase Cloud Messaging)
+# -----------------------------
+# Triggered by an external scheduler (e.g. a free cron-job.org ping or a
+# GitHub Actions scheduled workflow) hitting POST /genai/check-weather-alerts
+# every few hours — deliberately NOT an in-process scheduler, since Render's
+# free tier spins the service down when idle and would silently stop firing
+# if the check lived inside this process instead.
+#
+# Requires two env vars on Render, set once:
+#   FIREBASE_SERVICE_ACCOUNT_JSON — the full JSON key from Firebase Console
+#     > Project Settings > Service Accounts > Generate new private key.
+#   ALERT_JOB_SECRET              — any random string; the caller must send
+#     it back as the X-Alert-Secret header, so this endpoint can't be
+#     triggered by anyone who finds the URL.
+import firebase_admin
+from firebase_admin import credentials, firestore as admin_firestore, messaging
+
+_firebase_admin_app = None
+
+
+def _ensure_firebase_admin():
+    global _firebase_admin_app
+    if _firebase_admin_app is not None:
+        return _firebase_admin_app
+    raw = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not raw:
+        raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON is not set")
+    cred = credentials.Certificate(json.loads(raw))
+    _firebase_admin_app = firebase_admin.initialize_app(cred)
+    return _firebase_admin_app
+
+
+def _evaluate_alert(day: dict) -> Optional[dict]:
+    """`day` is one entry from _forecast_today_tomorrow. Checked most-to-least
+    severe — only the first match is returned, so a day with both a heatwave
+    and gusty wind gets one notification, not two."""
+    if day["temp_max"] >= 40:
+        return {
+            "key": f"{day['date']}:heat",
+            "title": "Extreme heat expected",
+            "body": f"Up to {day['temp_max']:.0f}°C on {day['date']}. Irrigate early morning or evening.",
+        }
+    if day["precip_prob"] >= 70:
+        return {
+            "key": f"{day['date']}:rain",
+            "title": "Heavy rain expected",
+            "body": f"{day['precip_prob']:.0f}% chance of rain on {day['date']}. Plan irrigation and harvest around it.",
+        }
+    if day["wind_max"] >= 40:
+        return {
+            "key": f"{day['date']}:wind",
+            "title": "High winds expected",
+            "body": f"Gusts up to {day['wind_max']:.0f} km/h on {day['date']}. Secure young plants and stakes.",
+        }
+    if day["temp_min"] <= 4:
+        return {
+            "key": f"{day['date']}:cold",
+            "title": "Cold snap expected",
+            "body": f"As low as {day['temp_min']:.0f}°C on {day['date']}. Protect sensitive crops overnight.",
+        }
+    return None
+
+
+def _forecast_today_tomorrow(lat: float, lon: float) -> List[dict]:
+    """Same Open-Meteo endpoint the iOS app calls (WeatherViewModel.swift) —
+    no API key needed, so the backend can reuse it directly."""
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max"
+        "&timezone=auto&forecast_days=2"
+    )
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    daily = resp.json()["daily"]
+    return [
+        {
+            "date": daily["time"][i],
+            "temp_max": daily["temperature_2m_max"][i],
+            "temp_min": daily["temperature_2m_min"][i],
+            "precip_prob": daily["precipitation_probability_max"][i],
+            "wind_max": daily["wind_speed_10m_max"][i],
+        }
+        for i in range(len(daily["time"]))
+    ]
+
+
+@app.post("/genai/check-weather-alerts")
+async def check_weather_alerts(x_alert_secret: Optional[str] = Header(None)):
+    """Scans users with weatherAlertsEnabled == true, checks their forecast
+    (via the lastLat/lastLon WeatherViewModel.swift saves), and sends one FCM
+    push for the most severe condition found — at most once per unique
+    (date, condition) per user, tracked via lastAlertKey on their user doc so
+    calling this more often than needed doesn't spam anyone. Call it from an
+    external scheduler (cron-job.org, GitHub Actions, etc.) every few hours."""
+    expected_secret = os.getenv("ALERT_JOB_SECRET")
+    if not expected_secret or x_alert_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Alert-Secret")
+
+    try:
+        _ensure_firebase_admin()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Firebase admin not configured: {str(e)}")
+
+    db = admin_firestore.client()
+    users_ref = db.collection("users").where("weatherAlertsEnabled", "==", True)
+
+    checked = 0
+    alerted = 0
+    errors: List[str] = []
+
+    for doc in users_ref.stream():
+        checked += 1
+        data = doc.to_dict() or {}
+        token = data.get("fcmToken")
+        lat = data.get("lastLat")
+        lon = data.get("lastLon")
+        if not token or lat is None or lon is None:
+            continue
+
+        try:
+            days = _forecast_today_tomorrow(lat, lon)
+        except Exception as e:
+            errors.append(f"{doc.id}: forecast failed ({str(e)})")
+            continue
+
+        alert = None
+        for day in days:
+            alert = _evaluate_alert(day)
+            if alert:
+                break
+
+        if not alert or data.get("lastAlertKey") == alert["key"]:
+            continue  # nothing to report, or already sent this exact alert
+
+        try:
+            messaging.send(messaging.Message(
+                notification=messaging.Notification(title=alert["title"], body=alert["body"]),
+                token=token,
+            ))
+            doc.reference.set({
+                "lastAlertKey": alert["key"],
+                "lastAlertSentAt": admin_firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+            alerted += 1
+        except Exception as e:
+            errors.append(f"{doc.id}: send failed ({str(e)})")
+
+    return {"checked": checked, "alerted": alerted, "errors": errors}
