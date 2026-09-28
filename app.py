@@ -257,85 +257,151 @@ Respond in {lang}.
 # -----------------------------
 # Disease + Nutrition from Image (Claude Vision)
 # -----------------------------
-# Allowed disease classes for detection (use exactly these labels)
-DISEASE_CLASS_NAMES = [
-  "Healthy",
-  "Anthracnose",
-  "Powdery Mildew",
-  "Sun Blotch",
-  "Cercospora Leaf Spot",
-  "Root Rot",
-  "Scab",
-  "Algal Leaf Spot"
-]
-
-VISION_PROMPT = """You are an expert plant pathologist. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Different images must get different disease_type when they show different conditions.
-
-Allowed disease_type (pick the ONE that best matches what you see):
-{class_names}
-
-Visual cues to distinguish:
-- Healthy: no spots, lesions, or discoloration; normal green leaf color.
+# Per-crop disease class lists + visual cues. Keyed by lowercased crop name
+# (matches the `crop_name` form field the iOS app sends). Adding a new crop
+# means adding one entry here — see build_vision_prompt/build_disease_tool
+# below, which pick the right list per request instead of using one global
+# Avocado-only list for every crop.
+#
+# A crop typed by the farmer that ISN'T in this dict (the "type your own"
+# option on the plant picker) is not silently mapped to one of these lists —
+# that would misdiagnose e.g. a tomato photo using avocado's disease classes.
+# Instead it falls through to the free-text path below: the model still
+# names a specific disease, just without a fixed enum to pick from, and the
+# prompt says so explicitly so it doesn't invent visual cues for a crop it
+# has no curated list for.
+CROP_DISEASE_INFO = {
+    "avocado": {
+        "classes": [
+            "Healthy",
+            "Anthracnose",
+            "Powdery Mildew",
+            "Sun Blotch",
+            "Cercospora Leaf Spot",
+            "Root Rot",
+            "Scab",
+            "Algal Leaf Spot",
+        ],
+        "visual_cues": """- Healthy: no spots, lesions, or discoloration; normal green leaf color.
 - Anthracnose: dark, sunken lesions; may show pink/orange spore masses in wet conditions.
 - Powdery Mildew: white or gray powdery coating on leaf surface.
 - Sun Blotch: irregular discolored or streaked blotches (more common on fruit than leaves).
 - Cercospora Leaf Spot: small circular spots, often gray center with dark brown or purple margin.
 - Root Rot: generalized yellowing, wilting, canopy thinning, or decline without distinct leaf lesions (roots not visible; infer only from visible plant stress).
 - Scab: raised, corky, or rough scabby lesions.
-- Algal Leaf Spot: greenish, orange, or rust-colored velvety/fuzzy circular spots.
+- Algal Leaf Spot: greenish, orange, or rust-colored velvety/fuzzy circular spots.""",
+    },
+    "paddy": {
+        "classes": [
+            "Healthy",
+            "Bacterial Leaf Blight",
+            "Rice Blast",
+            "Brown Spot",
+            "Leaf Smut",
+            "Sheath Blight",
+            "Bacterial Leaf Streak",
+            "Tungro",
+        ],
+        "visual_cues": """- Healthy: uniform green color, no lesions, spots, or discoloration.
+- Bacterial Leaf Blight: water-soaked yellow-to-white lesions with wavy margins, usually starting at the leaf tip or edges and spreading downward; lesions dry to grayish-white.
+- Rice Blast: diamond or spindle-shaped lesions with gray-white centers and reddish-brown to dark-brown borders, scattered across the leaf blade.
+- Brown Spot: small, round to oval brown spots with a yellow halo, scattered evenly across the leaf.
+- Leaf Smut: tiny, angular black spots scattered on the upper leaf surface, often clustered near the leaf tip.
+- Sheath Blight: irregular greenish-gray blotches with brown margins on the leaf sheath, usually starting near the waterline and moving upward.
+- Bacterial Leaf Streak: narrow, dark-green, water-soaked interveinal streaks that turn yellowish-brown and look translucent when held up to light.
+- Tungro: yellow-to-orange leaf discoloration combined with stunted, bushy plant growth (viral, spread by leafhoppers).""",
+    },
+}
+
+
+def build_vision_prompt(display_crop: str, info: Optional[dict]) -> str:
+    if info:
+        return """You are an expert plant pathologist examining a {crop} plant/leaf. Look at THIS specific image and base your answer ONLY on what you see (lesions, spots, color, mold, rot, etc.). Different images must get different disease_type when they show different conditions.
+
+Allowed disease_type (pick the ONE that best matches what you see):
+{class_names}
+
+Visual cues to distinguish:
+{visual_cues}
 - None detected: image is not a plant/leaf/crop or too blurry to determine.
 
 Base disease_type and disease_confidence strictly on THIS image only. Then call the report_disease_analysis tool with your findings — always call it, even for a healthy or unclear photo, picking your best-guess disease_type rather than leaving it out.""".format(
-    class_names=", ".join(f'"{x}"' for x in DISEASE_CLASS_NAMES)
-)
+            crop=display_crop,
+            class_names=", ".join(f'"{x}"' for x in info["classes"]),
+            visual_cues=info["visual_cues"],
+        )
+
+    # No curated disease list for this crop (farmer typed a crop name outside
+    # the picker) — still tell the model which plant it is (that alone rules
+    # out most misidentification risk), but let it name the disease itself
+    # rather than forcing a fit into an unrelated crop's class list.
+    return f"""You are an expert plant pathologist examining a {display_crop} plant/leaf photo. Base your answer ONLY on what you see in THIS image (lesions, spots, discoloration, mold, rot, wilting, pest damage, etc.) — do not guess from general knowledge of {display_crop} beyond what's visible here.
+
+There is no fixed disease list configured for {display_crop} in this system, so use your own plant-pathology knowledge and name the specific disease, pest, or nutrient deficiency you observe, in plain English (e.g. "Early Blight", "Aphid Infestation", "Nitrogen Deficiency"). If the plant looks healthy, set disease_type to "Healthy". If the image doesn't clearly show a plant/leaf, set it to "Unable to determine".
+
+Then call the report_disease_analysis tool with your findings — always call it, even for a healthy or unclear photo, picking your best-guess rather than leaving it out."""
+
 
 # Forcing a tool call here (instead of asking the model to "reply with only
 # JSON") means the SDK hands back schema-validated, already-parsed data —
 # there is no raw JSON string to mis-parse if the model adds so much as one
 # stray sentence, which is what was producing "Unknown condition" under the
-# old prompt-only JSON approach.
-DISEASE_ANALYSIS_TOOL = {
-    "name": "report_disease_analysis",
-    "description": "Report the plant disease diagnosis found in the analyzed image.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "disease_type": {
-                "type": "string",
-                "enum": DISEASE_CLASS_NAMES,
-                "description": "The single best-matching disease classification for the image.",
+# old prompt-only JSON approach. The tool's disease_type enum is built per
+# crop so the model can only pick from that crop's actual disease list; for
+# an uncurated crop, disease_type falls back to a free-text field instead of
+# an enum (still forced through the tool call, so still schema-validated —
+# just without a fixed set of allowed values).
+def build_disease_tool(info: Optional[dict]) -> dict:
+    disease_type_schema = (
+        {
+            "type": "string",
+            "enum": info["classes"],
+            "description": "The single best-matching disease classification for the image.",
+        }
+        if info
+        else {
+            "type": "string",
+            "description": "The plant disease, pest, or deficiency name in plain English, or 'Healthy' / 'Unable to determine'.",
+        }
+    )
+    return {
+        "name": "report_disease_analysis",
+        "description": "Report the plant disease diagnosis found in the analyzed image.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "disease_type": disease_type_schema,
+                "disease_confidence": {
+                    "type": "number",
+                    "description": "Confidence 0-100 (percentage).",
+                },
+                "nutrition_deficiency": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Nutrient deficiencies visible, e.g. ['Nitrogen', 'Iron']. Empty array if none visible.",
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["Mild", "Moderate", "Severe", "Healthy"],
+                },
+                "treatment_summary": {
+                    "type": "string",
+                    "description": "1-2 sentences specific to this condition.",
+                },
+                "treatment_steps": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "3-5 concrete actionable steps.",
+                },
+                "other_observations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Pests, multiple symptoms, growth stage, environmental stress, etc.",
+                },
             },
-            "disease_confidence": {
-                "type": "number",
-                "description": "Confidence 0-100 (percentage).",
-            },
-            "nutrition_deficiency": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Nutrient deficiencies visible, e.g. ['Nitrogen', 'Iron']. Empty array if none visible.",
-            },
-            "severity": {
-                "type": "string",
-                "enum": ["Mild", "Moderate", "Severe", "Healthy"],
-            },
-            "treatment_summary": {
-                "type": "string",
-                "description": "1-2 sentences specific to this condition.",
-            },
-            "treatment_steps": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "3-5 concrete actionable steps.",
-            },
-            "other_observations": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Pests, multiple symptoms, growth stage, environmental stress, etc.",
-            },
+            "required": ["disease_type", "disease_confidence"],
         },
-        "required": ["disease_type", "disease_confidence"],
-    },
-}
+    }
 
 
 @app.post("/genai/disease-from-image", response_model=DiseaseImageAnalysis)
@@ -366,7 +432,14 @@ async def disease_from_image(
         f" Write all human-readable text (treatment_summary, treatment_steps, other_observations) in {lang}."
         + (" Use the native script (Devanagari for Hindi, Telugu script for Telugu)." if lang != "English" else "")
     )
-    crop_note = f" Optional context: crop is '{crop_name}'." if crop_name else ""
+
+    crop_name_raw = (crop_name or "").strip()
+    crop_key = crop_name_raw.lower()
+    info = CROP_DISEASE_INFO.get(crop_key)  # None if this crop has no curated list
+    display_crop = crop_name_raw.capitalize() if crop_name_raw else "plant"
+    vision_prompt = build_vision_prompt(display_crop, info)
+    disease_tool = build_disease_tool(info)
+
     user_content = [
         {
             "type": "image",
@@ -378,7 +451,7 @@ async def disease_from_image(
         },
         {
             "type": "text",
-            "text": VISION_PROMPT + lang_instruction + crop_note,
+            "text": vision_prompt + lang_instruction,
         },
     ]
 
@@ -386,7 +459,7 @@ async def disease_from_image(
         response = await client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=800,
-            tools=[DISEASE_ANALYSIS_TOOL],
+            tools=[disease_tool],
             tool_choice={"type": "tool", "name": "report_disease_analysis"},
             messages=[{"role": "user", "content": user_content}],
         )
